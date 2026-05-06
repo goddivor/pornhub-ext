@@ -1,7 +1,7 @@
 # Pornhub Extension for Aniyomi
 
 <p align="center">
-  <img src="res/mipmap-xxxhdpi/ic_launcher.png" alt="Pornhub Logo" width="120">
+  <img src="res/mipmap-xxxhdpi/ic_launcher.jpg" alt="Pornhub Logo" width="120">
 </p>
 
 <p align="center">
