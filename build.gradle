@@ -1,0 +1,14 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+apply plugin: 'kotlinx-serialization'
+
+ext {
+    extName = 'Pornhub'
+    pkgNameSuffix = 'all.pornhub'
+    extClass = '.Pornhub'
+    extVersionCode = 15
+    libVersion = '13'
+    containsNsfw = true
+}
+
+apply from: "$rootDir/common.gradle"
