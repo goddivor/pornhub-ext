@@ -6,7 +6,6 @@ import android.os.Build
 import android.text.Html
 import android.text.SpannableString
 import android.text.Spanned
-import android.util.Log
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animeextension.all.pornhub.extractors.PhCdnExtractor
@@ -53,6 +52,7 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
         .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
         .add("Accept-Language", "en-US,en;q=0.5")
+        .add("Cookie", "platform=pc; age_verified=1; accessAgeDisclaimerPH=1; accessPH=1")
         .add("Referer", baseUrl)
 
     private val json: Json by injectLazy()
@@ -62,13 +62,11 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
     }
 
     override fun popularAnimeSelector(): String {
-        Log.d("PornhubExt", "popularAnimeSelector called")
-        return "li.pcVideoListItem"
+        return "li.pcVideoListItem, div.singleVideo"
     }
 
     override fun popularAnimeRequest(page: Int): Request {
         val url = "$baseUrl/video?page=$page"
-        Log.d("PornhubExt", "popularAnimeRequest: $url")
         return GET(url, headers)
     }
 
@@ -76,8 +74,6 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
         val document = response.asJsoup()
         val selector = popularAnimeSelector()
         val elements = document.select(selector)
-
-        Log.d("PornhubExt", "popularAnimeParse - Found ${elements.size} total elements")
 
         // Filter out invalid videos before parsing
         val validAnimes = elements.mapNotNull { element ->
@@ -90,44 +86,42 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
                 // Skip videos with invalid URLs
                 if (href.isEmpty() || href.startsWith("javascript:") || !href.startsWith("/view_video")) {
-                    Log.d("PornhubExt", "Filtering out video with invalid URL: $href")
                     return@mapNotNull null
                 }
 
                 popularAnimeFromElement(element)
             } catch (e: Exception) {
-                Log.d("PornhubExt", "Error parsing element: ${e.message}")
                 null
             }
         }
-
-        Log.d("PornhubExt", "popularAnimeParse - ${validAnimes.size} valid videos after filtering")
 
         val hasNextPage = document.selectFirst(popularAnimeNextPageSelector()) != null
         return AnimesPage(validAnimes, hasNextPage)
     }
 
     override fun popularAnimeFromElement(element: Element): SAnime {
-        Log.d("PornhubExt", "popularAnimeFromElement called with element: ${element.className()}")
         val anime = SAnime.create()
 
-        // Try different selectors to find the link
-        var linkElement = element.selectFirst("a.linkVideoThumb")
-        if (linkElement == null) {
-            linkElement = element.selectFirst("div.wrap div.phimage a")
-        }
-        if (linkElement == null) {
-            linkElement = element.selectFirst("a[href^=/view_video]")
-        }
+        val linkElement = element.selectFirst("a.linkVideoThumb")
+            ?: element.selectFirst("div.wrap div.phimage a")
+            ?: element.selectFirst("a.imageLink")
+            ?: element.selectFirst("a[href^=/view_video]")
 
         val href = linkElement?.attr("href") ?: ""
-        val title = fromHtml(linkElement?.attr("title")).toString()
-        val imgElement = linkElement?.selectFirst("img")
-        val thumbnail = imgElement?.attr("data-image")?.ifEmpty {
-            imgElement.attr("src")
-        } ?: ""
+        val imgElement = linkElement?.selectFirst("img") ?: element.selectFirst("img")
 
-        Log.d("PornhubExt", "Found video - Title: $title, URL: $href, Thumbnail: ${thumbnail.take(50)}...")
+        // Title: prefer link's title attr (desktop), then img alt (mobile), then .title text (mobile)
+        val rawTitle = linkElement?.attr("title")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("alt")?.takeIf { it.isNotBlank() }
+            ?: element.selectFirst("div.title a")?.text()?.takeIf { it.isNotBlank() }
+            ?: ""
+        val title = fromHtml(rawTitle).toString()
+
+        // Thumbnail: data-image (desktop) > data-path > src
+        val thumbnail = imgElement?.attr("data-image")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("data-path")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("src")
+            ?: ""
 
         anime.setUrlWithoutDomain(href)
         anime.title = title
@@ -136,8 +130,7 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
     }
 
     override fun popularAnimeNextPageSelector(): String {
-        Log.d("PornhubExt", "popularAnimeNextPageSelector called")
-        return "div.wrapper"
+        return "div.wrapper, link[rel=next], a.page_next, div.page_next"
     }
 
     @OptIn(ExperimentalSerializationApi::class)
@@ -181,7 +174,7 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
             val newList = mutableListOf<Video>()
             var preferred = 0
             for (video in this) {
-                if (video.quality == quality) {
+                if (video.quality.startsWith(quality)) {
                     newList.add(preferred, video)
                     preferred++
                 } else {
@@ -263,7 +256,6 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
             "$baseUrl/video?${params.joinToString("&")}"
         }
 
-        Log.d("PornhubExt", "searchAnimeRequest: $url")
         return GET(url, headers)
     }
 
@@ -281,8 +273,6 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
         val selector = searchAnimeSelector()
         val elements = document.select(selector)
 
-        Log.d("PornhubExt", "searchAnimeParse - Found ${elements.size} total elements")
-
         // Filter out invalid videos before parsing
         val validAnimes = elements.mapNotNull { element ->
             try {
@@ -294,18 +284,14 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
                 // Skip videos with invalid URLs
                 if (href.isEmpty() || href.startsWith("javascript:") || !href.startsWith("/view_video")) {
-                    Log.d("PornhubExt", "Filtering out video with invalid URL: $href")
                     return@mapNotNull null
                 }
 
                 searchAnimeFromElement(element)
             } catch (e: Exception) {
-                Log.d("PornhubExt", "Error parsing element: ${e.message}")
                 null
             }
         }
-
-        Log.d("PornhubExt", "searchAnimeParse - ${validAnimes.size} valid videos after filtering")
 
         val hasNextPage = document.selectFirst(searchAnimeNextPageSelector()) != null
         return AnimesPage(validAnimes, hasNextPage)
@@ -315,7 +301,7 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     override fun searchAnimeNextPageSelector(): String = popularAnimeNextPageSelector()
 
-    override fun searchAnimeSelector(): String = "li.pcVideoListItem"
+    override fun searchAnimeSelector(): String = "li.pcVideoListItem, div.singleVideo"
 
     @OptIn(ExperimentalSerializationApi::class)
     override fun animeDetailsParse(document: Document): SAnime {
@@ -341,7 +327,6 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     override fun latestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/video?o=cm&page=$page"
-        Log.d("PornhubExt", "latestUpdatesRequest: $url")
         return GET(url, headers)
     }
 
@@ -349,8 +334,6 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
         val document = response.asJsoup()
         val selector = latestUpdatesSelector()
         val elements = document.select(selector)
-
-        Log.d("PornhubExt", "latestUpdatesParse - Found ${elements.size} total elements")
 
         // Filter out invalid videos before parsing
         val validAnimes = elements.mapNotNull { element ->
@@ -363,24 +346,20 @@ class Pornhub : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
                 // Skip videos with invalid URLs
                 if (href.isEmpty() || href.startsWith("javascript:") || !href.startsWith("/view_video")) {
-                    Log.d("PornhubExt", "Filtering out video with invalid URL: $href")
                     return@mapNotNull null
                 }
 
                 latestUpdatesFromElement(element)
             } catch (e: Exception) {
-                Log.d("PornhubExt", "Error parsing element: ${e.message}")
                 null
             }
         }
-
-        Log.d("PornhubExt", "latestUpdatesParse - ${validAnimes.size} valid videos after filtering")
 
         val hasNextPage = document.selectFirst(latestUpdatesNextPageSelector()) != null
         return AnimesPage(validAnimes, hasNextPage)
     }
 
-    override fun latestUpdatesSelector(): String = "li.pcVideoListItem"
+    override fun latestUpdatesSelector(): String = "li.pcVideoListItem, div.singleVideo"
 
     override fun latestUpdatesFromElement(element: Element): SAnime = popularAnimeFromElement(element)
 
